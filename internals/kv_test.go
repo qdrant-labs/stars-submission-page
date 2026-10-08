@@ -137,7 +137,7 @@ func TestContentQuota(t *testing.T) {
 	}
 	// a tracker from an earlier month must not reduce the quota
 	err := s.db.Update(func(tx *bbolt.Tx) error {
-		return putJSON(tx.Bucket(submissionsTrackerBucket), userKey(alice),
+		return putJSON(tx.Bucket(submissionsTrackerBucket), UserKey(alice),
 			SubmissionTracker{Year: time.Now().Year() - 1, Month: time.Now().Month(), ContentPieces: MaxContentPieces})
 	})
 	if err != nil {

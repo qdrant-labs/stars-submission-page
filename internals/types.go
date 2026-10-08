@@ -119,3 +119,8 @@ type GetSubmissionsResponse struct {
 type GetQuotaResponse struct {
 	Quota int `json:"quota"`
 }
+
+type GetSuggestionsRequest struct {
+	Url         string `json:"url"`
+	Description string `json:"description"`
+}

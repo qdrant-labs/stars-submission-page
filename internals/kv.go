@@ -1,11 +1,13 @@
 package internals
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"slices"
 	"time"
 
@@ -56,7 +58,7 @@ func key(id string) []byte {
 
 // userKey identifies a user by (sub, iss). The NUL separator keeps
 // different (sub, iss) pairs from concatenating to the same string.
-func userKey(user User) []byte {
+func UserKey(user User) []byte {
 	return key(user.Sub + "\x00" + user.Iss)
 }
 
@@ -113,27 +115,42 @@ func (s *Store) DeleteSession(sessionId string) error {
 	})
 }
 
-func (s *Store) CleanupSessions(every time.Duration) {
-	for range time.Tick(every) {
-		_ = s.db.Update(func(tx *bbolt.Tx) error {
-			b := tx.Bucket(sessionsBucket)
-			// Deleting inside ForEach can skip keys, so collect first.
-			var expired [][]byte
-			_ = b.ForEach(func(k, v []byte) error {
-				var session Session
-				if err := json.Unmarshal(v, &session); err != nil || time.Now().After(session.ExpiresAt) {
-					expired = append(expired, slices.Clone(k))
-				}
-				return nil
-			})
-			for _, k := range expired {
-				if err := b.Delete(k); err != nil {
-					return err
-				}
+// CleanupSessions periodically removes expired sessions until ctx is cancelled.
+func (s *Store) CleanupSessions(ctx context.Context, every time.Duration) {
+	ticker := time.NewTicker(every)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			log.Println("Stopping sessions cleanup worker")
+			return
+		case <-ticker.C:
+			if err := s.deleteExpiredSessions(); err != nil {
+				log.Printf("Could not clean up sessions: %v", err)
+			}
+		}
+	}
+}
+
+func (s *Store) deleteExpiredSessions() error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket(sessionsBucket)
+		// Deleting inside ForEach can skip keys, so collect first.
+		var expired [][]byte
+		_ = b.ForEach(func(k, v []byte) error {
+			var session Session
+			if err := json.Unmarshal(v, &session); err != nil || time.Now().After(session.ExpiresAt) {
+				expired = append(expired, slices.Clone(k))
 			}
 			return nil
 		})
-	}
+		for _, k := range expired {
+			if err := b.Delete(k); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // PutSubmission validates and stores a submission. The monthly limit check and
@@ -153,7 +170,7 @@ func (s *Store) PutSubmission(user User, submission Submission) (string, error) 
 	}
 
 	now := time.Now().UTC()
-	uid := userKey(user)
+	uid := UserKey(user)
 	submission.ID = id
 	submission.Owner = string(uid)
 	// Server-set from the session; anything the client sent is overwritten.
@@ -215,7 +232,7 @@ func (s *Store) PutSubmission(user User, submission Submission) (string, error) 
 func (s *Store) GetSubmissionsByUser(user User) ([]Submission, error) {
 	submissions := []Submission{}
 	err := s.db.View(func(tx *bbolt.Tx) error {
-		list, err := getJSON[UserSubmissions](tx.Bucket(userSubmissionsBucket), userKey(user))
+		list, err := getJSON[UserSubmissions](tx.Bucket(userSubmissionsBucket), UserKey(user))
 		if err != nil || list == nil {
 			return err
 		}
@@ -251,7 +268,7 @@ func (s *Store) GetSubmission(submissionId string, user User) (*Submission, erro
 	if sub == nil {
 		return nil, fmt.Errorf("%w: %s", ErrNotFound, submissionId)
 	}
-	if !user.IsAdmin() && sub.Owner != string(userKey(user)) {
+	if !user.IsAdmin() && sub.Owner != string(UserKey(user)) {
 		return nil, fmt.Errorf("%w: %s", ErrForbidden, submissionId)
 	}
 	return sub, nil
@@ -268,7 +285,7 @@ func (s *Store) DeleteSubmission(submissionId string, user User) error {
 		if sub == nil {
 			return fmt.Errorf("%w: %s", ErrNotFound, submissionId)
 		}
-		if !user.IsAdmin() && sub.Owner != string(userKey(user)) {
+		if !user.IsAdmin() && sub.Owner != string(UserKey(user)) {
 			return fmt.Errorf("%w: %s", ErrForbidden, submissionId)
 		}
 		if err := subs.Delete([]byte(submissionId)); err != nil {
@@ -319,7 +336,7 @@ func (s *Store) GetContentQuota(u User) (int, error) {
 	var tracker *SubmissionTracker
 	err := s.db.View(func(tx *bbolt.Tx) error {
 		var err error
-		tracker, err = getJSON[SubmissionTracker](tx.Bucket(submissionsTrackerBucket), userKey(u))
+		tracker, err = getJSON[SubmissionTracker](tx.Bucket(submissionsTrackerBucket), UserKey(u))
 		return err
 	})
 	if err != nil {

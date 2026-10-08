@@ -51,7 +51,17 @@
 
           <p id="form-msg" class="msg" role="alert" hidden></p>
           <p id="quota" class="hint muted" aria-live="polite">You can submit up to 5 content pieces per month. Deleting a submission does not give the slot back.</p>
-          <button id="submit" class="btn btn--primary" type="submit">Submit for review</button>
+          <div class="actions">
+            <button id="submit" class="btn btn--primary" type="submit">Submit for review</button>
+            <button id="suggest" class="btn btn--ghost" type="button"
+              title="Needs a link and a description. 2 AI reviews per day.">Get AI suggestions</button>
+          </div>
+          <div id="suggestions" class="suggestions" role="status" aria-live="polite" hidden>
+            <h3 class="suggestions__title">AI suggestions</h3>
+            <p id="suggestions-summary" class="muted"></p>
+            <ul id="suggestions-list"></ul>
+            <p id="suggestions-left" class="hint muted"></p>
+          </div>
         </form>
       </section>
 

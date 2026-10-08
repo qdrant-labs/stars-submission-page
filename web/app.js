@@ -168,9 +168,72 @@ async function loadQuota() {
     // Out of content slots: steer the form to events instead of failing on submit.
     radio.disabled = quota <= 0;
     if (quota <= 0 && radio.checked) document.querySelector('input[name=type][value=event]').checked = true;
+    syncSuggestButton();
   } catch {
     /* keep the static hint text */
   }
+}
+
+// AI suggestions only make sense for content pieces, not events.
+function syncSuggestButton() {
+  $("suggest").hidden = new FormData($("form")).get("type") !== "content";
+}
+
+function hideSuggestions() {
+  show($("suggestions"), false);
+}
+
+async function getSuggestions() {
+  const msg = $("form-msg");
+  flash(msg, "");
+  hideSuggestions();
+  const description = $("description").value.trim();
+  const url = $("url").value.trim();
+  if (!url || !safeHref(url)) return flash(msg, "AI suggestions need a valid http(s) link.");
+  if (!description) return flash(msg, "AI suggestions need a description.");
+
+  const btn = $("suggest");
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Reviewing… this can take a minute";
+  try {
+    const res = await api("api/suggestions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url, description }),
+      signal: AbortSignal.timeout(200000),
+    });
+    const out = await res.json();
+    const items = out.suggestions || [];
+    $("suggestions-list").replaceChildren(...items.map((text) => {
+      const li = document.createElement("li");
+      li.textContent = text;
+      return li;
+    }));
+    $("suggestions-summary").textContent = items.length === 0 && !out.could_be_improved
+      ? "No suggestions: this looks good to go."
+      : "Ideas to improve it before you submit:";
+    const left = res.headers.get("X-RateLimit-Remaining");
+    $("suggestions-left").textContent = left === null ? "" : `${left} AI review${left === "1" ? "" : "s"} left today.`;
+    show($("suggestions"), true);
+  } catch (err) {
+    flash(msg, err.name === "TimeoutError" ? "The AI review took too long. Please try again." : err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+
+$("suggest").addEventListener("click", getSuggestions);
+$("form").addEventListener("reset", () => {
+  hideSuggestions();
+  setTimeout(syncSuggestButton); // the reset event fires before the values are restored
+});
+for (const radio of document.querySelectorAll("input[name=type]")) {
+  radio.addEventListener("change", () => {
+    syncSuggestButton();
+    hideSuggestions();
+  });
 }
 
 $("description").addEventListener("input", (e) => {

@@ -131,3 +131,9 @@ input[type=url]:focus, textarea:focus { border-color: var(--violet); }
 .inline-form input:focus { border-color: var(--violet); }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .item__meta { font: 12px var(--mono); color: var(--muted); margin-bottom: 6px; overflow-wrap: anywhere; }
+
+.actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.suggestions { margin-top: 16px; padding: 12px 14px; border: 1px solid var(--violet); border-radius: var(--radius); background: var(--bg); }
+.suggestions__title { margin: 0 0 4px; font-size: 1rem; color: var(--violet); }
+.suggestions ul { margin: 8px 0; padding-left: 20px; }
+.suggestions li { margin: 4px 0; overflow-wrap: anywhere; }
