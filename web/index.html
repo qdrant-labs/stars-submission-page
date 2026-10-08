@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Qdrant Stars Submissions</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="wrap topbar__inner">
+      <span class="brand">Qdrant <span class="brand__sub">Stars</span></span>
+      <div id="session" class="session" hidden>
+        <span id="who" class="session__who"></span>
+        <span id="admin-badge" class="badge badge--admin" title="Member of qdrant-admins" hidden>Admin</span>
+        <button id="logout" class="btn btn--ghost" type="button">Log out</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <p id="loading" class="muted" role="status">Loading…</p>
+
+    <section id="login" class="card hero" hidden>
+      <h1>Submit your Qdrant content and events</h1>
+      <p class="muted">Log in to send us articles, videos, talks, and events for review.</p>
+      <a class="btn btn--primary" href="/auth/login">Log in with Pocket ID</a>
+    </section>
+
+    <div id="dashboard" hidden>
+      <section class="card">
+        <h2>New submission</h2>
+        <form id="form" novalidate>
+          <fieldset class="seg">
+            <legend class="label">Type</legend>
+            <label class="seg__opt"><input type="radio" name="type" value="content" checked><span>Content piece</span></label>
+            <label class="seg__opt"><input type="radio" name="type" value="event"><span>Event</span></label>
+          </fieldset>
+
+          <label class="field">
+            <span class="label">Link <span class="muted">(optional)</span></span>
+            <input id="url" name="url" type="url" placeholder="https://" autocomplete="off" maxlength="2048">
+          </label>
+
+          <label class="field">
+            <span class="label">Description</span>
+            <textarea id="description" name="description" rows="5" required maxlength="5000"
+              placeholder="What is it, where was it published or held, and why does it matter?"></textarea>
+            <span id="count" class="hint muted">0 / 5000</span>
+          </label>
+
+          <p id="form-msg" class="msg" role="alert" hidden></p>
+          <p id="quota" class="hint muted" aria-live="polite">You can submit up to 5 content pieces per month. Deleting a submission does not give the slot back.</p>
+          <button id="submit" class="btn btn--primary" type="submit">Submit for review</button>
+        </form>
+      </section>
+
+      <section id="admin" class="card card--admin" hidden>
+        <h2>All submissions <span class="badge badge--admin">Admin</span></h2>
+        <p class="muted">Every submission from every user, newest first. Deleting cannot be undone.</p>
+        <p id="admin-msg" class="msg" role="alert" hidden></p>
+        <p id="admin-empty" class="muted" hidden>No submissions yet.</p>
+        <ul id="admin-list" class="list"></ul>
+      </section>
+
+      <section class="card">
+        <h2>Your submissions</h2>
+        <p id="list-msg" class="msg" role="alert" hidden></p>
+        <p id="empty" class="muted" hidden>Nothing submitted yet.</p>
+        <ul id="list" class="list"></ul>
+      </section>
+    </div>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>
