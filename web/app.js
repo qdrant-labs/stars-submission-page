@@ -8,10 +8,18 @@ let isAdmin = false;
 const $ = (id) => document.getElementById(id);
 const show = (el, on) => { el.hidden = !on; };
 
-function flash(el, text, ok) {
+const flashTimers = new WeakMap();
+
+// Shows (or clears, when text is empty) a message. With ttlMs, it hides itself
+// after that long, unless a newer message replaced it in the meantime.
+function flash(el, text, ok, ttlMs) {
+  clearTimeout(flashTimers.get(el));
   el.textContent = text;
   el.classList.toggle("msg--ok", !!ok);
   show(el, !!text);
+  if (text && ttlMs) {
+    flashTimers.set(el, setTimeout(() => flash(el, ""), ttlMs));
+  }
 }
 
 // Fetch wrapper: a 401 means the session is gone, so go back to the login view.
@@ -225,6 +233,10 @@ async function getSuggestions() {
 }
 
 $("suggest").addEventListener("click", getSuggestions);
+$("clear-suggestions").addEventListener("click", () => {
+  hideSuggestions();
+  $("suggest").focus();
+});
 $("form").addEventListener("reset", () => {
   hideSuggestions();
   setTimeout(syncSuggestButton); // the reset event fires before the values are restored
@@ -266,7 +278,7 @@ $("form").addEventListener("submit", async (e) => {
     });
     e.target.reset();
     $("count").textContent = "0 / 5000";
-    flash(msg, "Submitted. Thank you!", true);
+    flash(msg, "Submitted. Thank you!", true, 15000);
     await Promise.all([refreshLists(), loadQuota()]);
   } catch (err) {
     flash(msg, err.message);

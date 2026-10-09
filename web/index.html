@@ -57,7 +57,10 @@
               title="Needs a link and a description. 2 AI reviews per day.">Get AI suggestions</button>
           </div>
           <div id="suggestions" class="suggestions" role="status" aria-live="polite" hidden>
-            <h3 class="suggestions__title">AI suggestions</h3>
+            <div class="suggestions__head">
+              <h3 class="suggestions__title">AI suggestions</h3>
+              <button id="clear-suggestions" class="btn btn--ghost btn--small" type="button">Clear</button>
+            </div>
             <p id="suggestions-summary" class="muted"></p>
             <ul id="suggestions-list"></ul>
             <p id="suggestions-left" class="hint muted"></p>
