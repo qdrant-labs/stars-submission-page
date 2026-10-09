@@ -163,10 +163,13 @@ func (s *Store) PutSubmission(user User, submission Submission) (string, error) 
 	if err != nil {
 		return "", fmt.Errorf("error while creating ID for submission: %w", err)
 	}
-	if submission.SubmissionType == EventSubmissionType {
+	switch submission.SubmissionType {
+	case EventSubmissionType:
 		id = "ev-" + id
-	} else {
+	case ContentSubmissionType:
 		id = "cont-" + id
+	case OtherSubmissionType:
+		id = "other-" + id
 	}
 
 	now := time.Now().UTC()
