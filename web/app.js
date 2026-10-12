@@ -76,7 +76,7 @@ function renderItem(sub, admin = false) {
   head.className = "item__head";
 
   const badge = document.createElement("span");
-  badge.className = `badge badge--${sub.type === "event" ? "event" : "content"}`;
+  badge.className = `badge badge--${["event", "other"].includes(sub.type) ? sub.type : "content"}`;
   badge.textContent = sub.type;
 
   const date = document.createElement("span");
@@ -171,8 +171,8 @@ async function loadQuota() {
     const res = await api("/api/quota");
     const { quota } = await res.json();
     el.textContent = quota > 0
-      ? `${quota} of 5 content submissions left this month. Events are unlimited. Deleting a submission does not give the slot back.`
-      : "You have used all 5 content submissions for this month. You can still submit events.";
+      ? `${quota} of 5 content submissions left this month. Events and other submissions are unlimited. Deleting a submission does not give the slot back.`
+      : "You have used all 5 content submissions for this month. You can still submit events or other items.";
     // Out of content slots: steer the form to events instead of failing on submit.
     radio.disabled = quota <= 0;
     if (quota <= 0 && radio.checked) document.querySelector('input[name=type][value=event]').checked = true;
@@ -182,7 +182,7 @@ async function loadQuota() {
   }
 }
 
-// AI suggestions only make sense for content pieces, not events.
+// AI suggestions only make sense for content pieces, not events or other items.
 function syncSuggestButton() {
   $("suggest").hidden = new FormData($("form")).get("type") !== "content";
 }

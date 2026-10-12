@@ -13,6 +13,7 @@ type SubmissionType = string
 
 const ContentSubmissionType SubmissionType = "content"
 const EventSubmissionType SubmissionType = "event"
+const OtherSubmissionType SubmissionType = "other"
 const InvalidSubmissionType SubmissionType = ""
 const AdminGroup string = "qdrant-admins"
 
@@ -22,6 +23,8 @@ func ValidateSubmissionType(submissionType string) (SubmissionType, error) {
 		return ContentSubmissionType, nil
 	case "event":
 		return EventSubmissionType, nil
+	case "other":
+		return OtherSubmissionType, nil
 	default:
 		return InvalidSubmissionType, fmt.Errorf("Invalid submission type: %s", submissionType)
 	}
