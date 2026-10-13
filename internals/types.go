@@ -13,6 +13,7 @@ type SubmissionType = string
 
 const ContentSubmissionType SubmissionType = "content"
 const EventSubmissionType SubmissionType = "event"
+const CodeSubmissionType SubmissionType = "code"
 const OtherSubmissionType SubmissionType = "other"
 const InvalidSubmissionType SubmissionType = ""
 const AdminGroup string = "qdrant-admins"
@@ -23,6 +24,8 @@ func ValidateSubmissionType(submissionType string) (SubmissionType, error) {
 		return ContentSubmissionType, nil
 	case "event":
 		return EventSubmissionType, nil
+	case "code":
+		return CodeSubmissionType, nil
 	case "other":
 		return OtherSubmissionType, nil
 	default:
@@ -64,6 +67,8 @@ type SubmissionTracker struct {
 	Year          int        `json:"year"`
 	Month         time.Month `json:"month"`
 	ContentPieces int        `json:"content_pieces"`
+	CodePieces    int        `json:"code_pieces,omitempty"`
+	OtherPieces   int        `json:"other_pieces,omitempty"`
 	Events        int        `json:"events"`
 }
 
@@ -120,7 +125,8 @@ type GetSubmissionsResponse struct {
 }
 
 type GetQuotaResponse struct {
-	Quota int `json:"quota"`
+	Content int `json:"content"`
+	Code    int `json:"code"`
 }
 
 type GetSuggestionsRequest struct {

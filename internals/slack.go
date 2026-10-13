@@ -65,7 +65,7 @@ func buildMessage(description, ownerName, ownerEmail string, url *string, evalua
 	}
 	fmt.Fprintf(&b, "\n\nDescription:\n%s\n\nAI Review:\n", field(description))
 	if evaluation != nil {
-		fmt.Fprintf(&b, "%s\n\nRated: %f/10", field(evaluation.Review), evaluation.Rating)
+		fmt.Fprintf(&b, "%s\n\nRated: %g/10", field(evaluation.Review), evaluation.Rating)
 	} else {
 		b.WriteString("NA\n\nRated: NA")
 	}

@@ -238,12 +238,12 @@ func (a *App) deleteSubmission(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) getQuota(w http.ResponseWriter, r *http.Request) {
 	u, _ := a.userFrom(r)
-	quota, err := a.store.GetContentQuota(u)
+	quota, err := a.store.GetQuotas(u)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, internals.GetQuotaResponse{Quota: quota})
+	writeJSON(w, quota)
 }
 
 func (a *App) getSubmissions(w http.ResponseWriter, r *http.Request) {

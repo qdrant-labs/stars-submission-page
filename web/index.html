@@ -34,6 +34,7 @@
           <fieldset class="seg">
             <legend class="label">Type</legend>
             <label class="seg__opt"><input type="radio" name="type" value="content" checked><span>Content piece</span></label>
+            <label class="seg__opt"><input type="radio" name="type" value="code"><span>Code</span></label>
             <label class="seg__opt"><input type="radio" name="type" value="event"><span>Event</span></label>
             <label class="seg__opt"><input type="radio" name="type" value="other"><span>Other</span></label>
           </fieldset>
@@ -71,10 +72,15 @@
 
       <section id="admin" class="card card--admin" hidden>
         <h2>All submissions <span class="badge badge--admin">Admin</span></h2>
-        <p class="muted">Every submission from every user, newest first. Deleting cannot be undone.</p>
+        <p class="muted">Every submission from every user, grouped by month and then by person. Deleting cannot be undone.</p>
+        <label class="field year">
+          <span class="label">Year</span>
+          <select id="admin-year"></select>
+        </label>
         <p id="admin-msg" class="msg" role="alert" hidden></p>
         <p id="admin-empty" class="muted" hidden>No submissions yet.</p>
-        <ul id="admin-list" class="list"></ul>
+        <p id="admin-year-empty" class="muted"></p>
+        <div id="admin-list" class="months"></div>
       </section>
 
       <section class="card">

@@ -1,8 +1,10 @@
 package internals
 
 import (
+	"encoding/json"
 	"errors"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -121,19 +123,19 @@ func TestSessions(t *testing.T) {
 
 func TestContentQuota(t *testing.T) {
 	s := newTestStore(t)
-	if q, err := s.GetContentQuota(alice); err != nil || q != MaxContentPieces {
-		t.Fatalf("fresh: %d, %v", q, err)
+	if q, err := s.GetQuotas(alice); err != nil || q.Content != MaxContentPieces {
+		t.Fatalf("fresh: %+v, %v", q, err)
 	}
 	for i := 0; i < 2; i++ {
 		if _, err := s.PutSubmission(alice, content()); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if q, _ := s.GetContentQuota(alice); q != MaxContentPieces-2 {
-		t.Fatalf("after 2: %d", q)
+	if q, _ := s.GetQuotas(alice); q.Content != MaxContentPieces-2 {
+		t.Fatalf("after 2: %+v", q)
 	}
-	if q, _ := s.GetContentQuota(bob); q != MaxContentPieces {
-		t.Fatalf("bob: %d", q)
+	if q, _ := s.GetQuotas(bob); q.Content != MaxContentPieces {
+		t.Fatalf("bob: %+v", q)
 	}
 	// a tracker from an earlier month must not reduce the quota
 	err := s.db.Update(func(tx *bbolt.Tx) error {
@@ -143,8 +145,8 @@ func TestContentQuota(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if q, _ := s.GetContentQuota(alice); q != MaxContentPieces {
-		t.Fatalf("stale tracker: %d", q)
+	if q, _ := s.GetQuotas(alice); q.Content != MaxContentPieces {
+		t.Fatalf("stale tracker: %+v", q)
 	}
 }
 
@@ -160,5 +162,119 @@ func TestOwnerIdentityIsServerSet(t *testing.T) {
 	got, err := s.GetSubmission(id, u)
 	if err != nil || got.OwnerUsername != "alice" || got.OwnerEmail != "alice@example.com" {
 		t.Fatalf("%+v %v", got, err)
+	}
+}
+
+func submissionOf(typ string) Submission { return Submission{SubmissionType: typ, Details: "thing"} }
+
+func TestCodeSubmissions(t *testing.T) {
+	s := newTestStore(t)
+	id, err := s.PutSubmission(alice, submissionOf(CodeSubmissionType))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(id, "code-") {
+		t.Fatalf("id = %q, want code- prefix", id)
+	}
+	sub, err := s.GetSubmission(id, alice)
+	if err != nil || sub.SubmissionType != CodeSubmissionType {
+		t.Fatalf("got %+v, %v", sub, err)
+	}
+}
+
+func TestCodeLimit(t *testing.T) {
+	s := newTestStore(t)
+	for i := 0; i < MaxCodePieces; i++ {
+		if _, err := s.PutSubmission(alice, submissionOf(CodeSubmissionType)); err != nil {
+			t.Fatalf("code %d: %v", i, err)
+		}
+	}
+	if _, err := s.PutSubmission(alice, submissionOf(CodeSubmissionType)); !errors.Is(err, ErrLimitReached) {
+		t.Fatalf("over the code limit: %v", err)
+	}
+	// other users and other types are unaffected
+	if _, err := s.PutSubmission(bob, submissionOf(CodeSubmissionType)); err != nil {
+		t.Fatalf("bob: %v", err)
+	}
+	for _, typ := range []string{ContentSubmissionType, EventSubmissionType, OtherSubmissionType} {
+		if _, err := s.PutSubmission(alice, submissionOf(typ)); err != nil {
+			t.Fatalf("%s after code limit: %v", typ, err)
+		}
+	}
+}
+
+func TestLimitsAreIndependent(t *testing.T) {
+	s := newTestStore(t)
+	for i := 0; i < MaxContentPieces; i++ {
+		if _, err := s.PutSubmission(alice, content()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.PutSubmission(alice, content()); !errors.Is(err, ErrLimitReached) {
+		t.Fatalf("content over limit: %v", err)
+	}
+	if _, err := s.PutSubmission(alice, submissionOf(CodeSubmissionType)); err != nil {
+		t.Fatalf("code after content limit: %v", err)
+	}
+	q, err := s.GetQuotas(alice)
+	if err != nil || q.Content != 0 || q.Code != MaxCodePieces-1 {
+		t.Fatalf("quotas = %+v, %v", q, err)
+	}
+}
+
+func TestOtherAndEventAreUnlimited(t *testing.T) {
+	s := newTestStore(t)
+	for _, typ := range []string{EventSubmissionType, OtherSubmissionType} {
+		for i := 0; i < MaxContentPieces+MaxCodePieces+1; i++ {
+			if _, err := s.PutSubmission(alice, submissionOf(typ)); err != nil {
+				t.Fatalf("%s %d: %v", typ, i, err)
+			}
+		}
+	}
+	if q, _ := s.GetQuotas(alice); q.Content != MaxContentPieces || q.Code != MaxCodePieces {
+		t.Fatalf("unlimited types must not use quota: %+v", q)
+	}
+}
+
+func TestOtherSubmissionID(t *testing.T) {
+	s := newTestStore(t)
+	id, err := s.PutSubmission(alice, submissionOf(OtherSubmissionType))
+	if err != nil || !strings.HasPrefix(id, "other-") {
+		t.Fatalf("id = %q, %v", id, err)
+	}
+}
+
+func TestCodeQuotaResetsNextMonth(t *testing.T) {
+	s := newTestStore(t)
+	err := s.db.Update(func(tx *bbolt.Tx) error {
+		return putJSON(tx.Bucket(submissionsTrackerBucket), UserKey(alice),
+			SubmissionTracker{Year: time.Now().Year() - 1, Month: time.Now().Month(), CodePieces: MaxCodePieces})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q, _ := s.GetQuotas(alice); q.Code != MaxCodePieces {
+		t.Fatalf("stale tracker: %+v", q)
+	}
+	if _, err := s.PutSubmission(alice, submissionOf(CodeSubmissionType)); err != nil {
+		t.Fatalf("new month should reset the code counter: %v", err)
+	}
+}
+
+func TestQuotaResponseJSON(t *testing.T) {
+	b, err := json.Marshal(GetQuotaResponse{Content: 3, Code: 7})
+	if err != nil || string(b) != `{"content":3,"code":7}` {
+		t.Fatalf("%s, %v", b, err)
+	}
+}
+
+func TestValidateCodeType(t *testing.T) {
+	for _, typ := range []string{"content", "code", "event", "other"} {
+		if got, err := ValidateSubmissionType(typ); err != nil || got != typ {
+			t.Fatalf("%s: %q, %v", typ, got, err)
+		}
+	}
+	if _, err := ValidateSubmissionType("Code"); err == nil {
+		t.Fatal("type names are case-sensitive")
 	}
 }

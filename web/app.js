@@ -76,7 +76,7 @@ function renderItem(sub, admin = false) {
   head.className = "item__head";
 
   const badge = document.createElement("span");
-  badge.className = `badge badge--${["event", "other"].includes(sub.type) ? sub.type : "content"}`;
+  badge.className = `badge badge--${["event", "code", "other"].includes(sub.type) ? sub.type : "content"}`;
   badge.textContent = sub.type;
 
   const date = document.createElement("span");
@@ -136,14 +136,111 @@ function refreshLists() {
   return Promise.all([loadSubmissions(), isAdmin ? loadAdminSubmissions() : null]);
 }
 
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December"];
+
+// Admin view state, kept across refreshes so deleting does not collapse everything.
+let adminSubs = [];
+let adminYear = new Date().getUTCFullYear();
+const adminOpen = new Set();
+
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+function collapsible(key, className, summaryEl) {
+  const d = document.createElement("details");
+  d.className = className;
+  d.open = adminOpen.has(key);
+  d.addEventListener("toggle", () => {
+    if (d.open) adminOpen.add(key); else adminOpen.delete(key);
+  });
+  const sum = document.createElement("summary");
+  sum.append(summaryEl);
+  d.append(sum);
+  return d;
+}
+
+function summaryLine(label, count, extra) {
+  const row = document.createElement("span");
+  row.className = "sum";
+  const name = document.createElement("span");
+  name.className = "sum__name";
+  name.textContent = label;
+  const n = document.createElement("span");
+  n.className = "sum__count";
+  n.textContent = plural(count, "submission");
+  row.append(name, n);
+  if (extra) {
+    const e = document.createElement("span");
+    e.className = "sum__extra";
+    e.textContent = extra;
+    row.append(e);
+  }
+  return row;
+}
+
+// Months are bucketed in UTC, the same calendar the server uses for monthly limits.
+function renderAdminSubmissions() {
+  const years = new Set(adminSubs.map((s) => new Date(s.timestamp).getUTCFullYear()).filter((y) => !isNaN(y)));
+  years.add(new Date().getUTCFullYear());
+  years.add(adminYear);
+  const sel = $("admin-year");
+  sel.replaceChildren(...[...years].sort((a, b) => b - a).map((y) => {
+    const o = document.createElement("option");
+    o.value = o.textContent = String(y);
+    return o;
+  }));
+  sel.value = String(adminYear);
+
+  const byMonth = Array.from({ length: 12 }, () => new Map());
+  let inYear = 0;
+  for (const sub of adminSubs) {
+    const when = new Date(sub.timestamp);
+    if (isNaN(when) || when.getUTCFullYear() !== adminYear) continue;
+    inYear++;
+    const people = byMonth[when.getUTCMonth()];
+    const id = sub.owner || sub.owner_email || sub.owner_username || "unknown";
+    if (!people.has(id)) people.set(id, { sub, items: [] });
+    people.get(id).items.push(sub);
+  }
+
+  const boxes = byMonth.map((people, m) => {
+    const monthKey = `${adminYear}-${m}`;
+    const total = [...people.values()].reduce((n, p) => n + p.items.length, 0);
+    if (total === 0) {
+      const empty = document.createElement("div");
+      empty.className = "month month--empty";
+      empty.append(summaryLine(MONTH_NAMES[m], 0));
+      return empty;
+    }
+    const month = collapsible(monthKey, "month", summaryLine(MONTH_NAMES[m], total, plural(people.size, "person").replace("persons", "people")));
+    const body = document.createElement("div");
+    body.className = "month__body";
+    const sorted = [...people.values()].sort((a, b) => b.items.length - a.items.length);
+    for (const { sub, items } of sorted) {
+      const label = [sub.owner_username, sub.owner_email && `<${sub.owner_email}>`].filter(Boolean).join(" ")
+        || `owner ${(sub.owner || "unknown").slice(0, 8)}`;
+      const person = collapsible(`${monthKey}/${sub.owner || label}`, "person", summaryLine(label, items.length));
+      const ul = document.createElement("ul");
+      ul.className = "list";
+      items.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+      ul.append(...items.map((s) => renderItem(s, true)));
+      person.append(ul);
+      body.append(person);
+    }
+    month.append(body);
+    return month;
+  });
+  $("admin-list").replaceChildren(...boxes);
+  show($("admin-empty"), adminSubs.length === 0);
+  $("admin-year-empty").textContent = adminSubs.length && inYear === 0 ? `No submissions in ${adminYear}.` : "";
+}
+
 async function loadAdminSubmissions() {
   try {
     const res = await api("/api/admin/submissions");
     const { submissions } = await res.json();
-    const list = submissions || [];
-    list.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-    $("admin-list").replaceChildren(...list.map((s) => renderItem(s, true)));
-    show($("admin-empty"), list.length === 0);
+    adminSubs = submissions || [];
+    renderAdminSubmissions();
     flash($("admin-msg"), "");
   } catch (err) {
     flash($("admin-msg"), err.message);
@@ -166,16 +263,21 @@ async function loadSubmissions() {
 
 async function loadQuota() {
   const el = $("quota");
-  const radio = document.querySelector('input[name=type][value=content]');
+  const contentRadio = document.querySelector('input[name=type][value=content]');
+  const codeRadio = document.querySelector('input[name=type][value=code]');
   try {
     const res = await api("/api/quota");
-    const { quota } = await res.json();
-    el.textContent = quota > 0
-      ? `${quota} of 5 content submissions left this month. Events and other submissions are unlimited. Deleting a submission does not give the slot back.`
-      : "You have used all 5 content submissions for this month. You can still submit events or other items.";
-    // Out of content slots: steer the form to events instead of failing on submit.
-    radio.disabled = quota <= 0;
-    if (quota <= 0 && radio.checked) document.querySelector('input[name=type][value=event]').checked = true;
+    const { content, code } = await res.json();
+    const parts = [
+      `${content} of 5 content submissions and ${code} of 10 code submissions left this month.`,
+      "Events and other submissions are unlimited. Deleting a submission does not give the slot back.",
+    ];
+    el.textContent = parts.join(" ");
+    // Out of slots: steer the form to events instead of failing on submit.
+    contentRadio.disabled = content <= 0;
+    codeRadio.disabled = code <= 0;
+    const checked = document.querySelector("input[name=type]:checked");
+    if (checked && checked.disabled) document.querySelector("input[name=type][value=event]").checked = true;
     syncSuggestButton();
   } catch {
     /* keep the static hint text */
@@ -205,7 +307,7 @@ async function getSuggestions() {
   btn.disabled = true;
   btn.textContent = "Reviewing… this can take a minute";
   try {
-    const res = await api("api/suggestions", {
+    const res = await api("/api/suggestions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url, description }),
@@ -233,6 +335,11 @@ async function getSuggestions() {
 }
 
 $("suggest").addEventListener("click", getSuggestions);
+$("admin-year").addEventListener("change", (e) => {
+  adminYear = Number(e.target.value);
+  renderAdminSubmissions();
+});
+
 $("clear-suggestions").addEventListener("click", () => {
   hideSuggestions();
   $("suggest").focus();

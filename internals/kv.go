@@ -17,6 +17,7 @@ import (
 
 const BoltDBPath string = "kv.db"
 const MaxContentPieces int = 5
+const MaxCodePieces int = 10
 
 type Store struct {
 	db *bbolt.DB
@@ -170,6 +171,8 @@ func (s *Store) PutSubmission(user User, submission Submission) (string, error) 
 		id = "cont-" + id
 	case OtherSubmissionType:
 		id = "other-" + id
+	case CodeSubmissionType:
+		id = "code-" + id
 	}
 
 	now := time.Now().UTC()
@@ -196,13 +199,21 @@ func (s *Store) PutSubmission(user User, submission Submission) (string, error) 
 		if tracker.Year != now.Year() || tracker.Month != now.Month() {
 			*tracker = SubmissionTracker{Year: now.Year(), Month: now.Month()}
 		}
-		if submission.SubmissionType == ContentSubmissionType {
+		switch submission.SubmissionType {
+		case ContentSubmissionType:
 			if tracker.ContentPieces >= MaxContentPieces {
 				return ErrLimitReached
 			}
 			tracker.ContentPieces++
-		} else {
+		case CodeSubmissionType:
+			if tracker.CodePieces >= MaxCodePieces {
+				return ErrLimitReached
+			}
+			tracker.CodePieces++
+		case EventSubmissionType:
 			tracker.Events++
+		case OtherSubmissionType:
+			tracker.OtherPieces++
 		}
 
 		userSubs := tx.Bucket(userSubmissionsBucket)
@@ -334,8 +345,8 @@ func (s *Store) GetSubmissions(u User) ([]Submission, error) {
 	return submissions, nil
 }
 
-// GetContentQuota returns how many content pieces the user can still submit this month.
-func (s *Store) GetContentQuota(u User) (int, error) {
+// GetQuotas returns how many content/code pieces the user can still submit this month.
+func (s *Store) GetQuotas(u User) (*GetQuotaResponse, error) {
 	var tracker *SubmissionTracker
 	err := s.db.View(func(tx *bbolt.Tx) error {
 		var err error
@@ -343,12 +354,12 @@ func (s *Store) GetContentQuota(u User) (int, error) {
 		return err
 	})
 	if err != nil {
-		return 0, fmt.Errorf("error while getting quota: %w", err)
+		return nil, fmt.Errorf("error while getting quota: %w", err)
 	}
 	now := time.Now().UTC()
 	// No tracker, or one from a previous month: the full quota is available.
 	if tracker == nil || tracker.Year != now.Year() || tracker.Month != now.Month() {
-		return MaxContentPieces, nil
+		return &GetQuotaResponse{Content: MaxContentPieces, Code: MaxCodePieces}, nil
 	}
-	return max(MaxContentPieces-tracker.ContentPieces, 0), nil
+	return &GetQuotaResponse{Content: max(MaxContentPieces-tracker.ContentPieces, 0), Code: max(MaxCodePieces-tracker.CodePieces, 0)}, nil
 }
