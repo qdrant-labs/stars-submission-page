@@ -2,3 +2,4 @@ kv.db
 .env
 server
 ci-trigger
+signup-links.csv

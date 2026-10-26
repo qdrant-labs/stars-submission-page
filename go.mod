@@ -1,6 +1,6 @@
 module github.com/qdrant-labs/stars-submission-page
 
-go 1.26.0
+go 1.27.0
 
 require (
 	github.com/OpenRouterTeam/go-agent v0.8.0
