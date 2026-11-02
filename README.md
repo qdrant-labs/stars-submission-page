@@ -3,7 +3,7 @@
 A small web app where community members submit content pieces and events for the Qdrant Stars program. Admins can see and delete every submission, and each new submission is posted to Slack.
 
 - **Login:** OIDC (Pocket ID). Members of the `qdrant-admins` group are admins.
-- **Submissions:** up to 5 content pieces per month per user (events are unlimited). Deleting a submission does not give the slot back.
+- **Submissions:** up to 5 content pieces per month per user (events are unlimited). Deleting a submission within 24 hours of submitting it gives the slot back; after that it does not.
 - **AI help:** users can ask for suggestions on a piece before submitting (2 per day). Content submissions with a link also get an AI review in the Slack notification. Both use an OpenRouter agent that reads the link.
 - **Storage:** a single embedded [bbolt](https://github.com/etcd-io/bbolt) file, `kv.db`.
 

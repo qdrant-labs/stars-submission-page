@@ -278,3 +278,136 @@ func TestValidateCodeType(t *testing.T) {
 		t.Fatal("type names are case-sensitive")
 	}
 }
+
+// backdate rewrites a stored submission's timestamp.
+func backdate(t *testing.T, s *Store, id string, ts time.Time) {
+	t.Helper()
+	err := s.db.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket(submissionsBucket)
+		sub, err := getJSON[Submission](b, []byte(id))
+		if err != nil || sub == nil {
+			t.Fatalf("backdate %s: %v", id, err)
+		}
+		sub.Timestamp = ts
+		return putJSON(b, []byte(id), sub)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDeleteWithinWindowRefundsSlot(t *testing.T) {
+	for _, typ := range []string{ContentSubmissionType, CodeSubmissionType} {
+		s := newTestStore(t)
+		id, err := s.PutSubmission(alice, submissionOf(typ))
+		if err != nil {
+			t.Fatal(err)
+		}
+		before, _ := s.GetQuotas(alice)
+		if err := s.DeleteSubmission(id, alice); err != nil {
+			t.Fatal(err)
+		}
+		after, _ := s.GetQuotas(alice)
+		if typ == ContentSubmissionType && (after.Content != before.Content+1 || after.Code != before.Code) {
+			t.Fatalf("content: before %+v after %+v", before, after)
+		}
+		if typ == CodeSubmissionType && (after.Code != before.Code+1 || after.Content != before.Content) {
+			t.Fatalf("code: before %+v after %+v", before, after)
+		}
+	}
+}
+
+func TestDeleteAfterWindowKeepsSlot(t *testing.T) {
+	s := newTestStore(t)
+	id, err := s.PutSubmission(alice, content())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 25h old, but kept in the current month so only the age decides
+	old := time.Now().UTC().Add(-RefundWindow - time.Hour)
+	backdate(t, s, id, old)
+	before, _ := s.GetQuotas(alice)
+	if err := s.DeleteSubmission(id, alice); err != nil {
+		t.Fatal(err)
+	}
+	if after, _ := s.GetQuotas(alice); *after != *before {
+		t.Fatalf("slot must not be refunded: before %+v after %+v", before, after)
+	}
+}
+
+func TestRefundAllowsSubmittingAgainAtLimit(t *testing.T) {
+	s := newTestStore(t)
+	var last string
+	for range MaxContentPieces {
+		id, err := s.PutSubmission(alice, content())
+		if err != nil {
+			t.Fatal(err)
+		}
+		last = id
+	}
+	if _, err := s.PutSubmission(alice, content()); !errors.Is(err, ErrLimitReached) {
+		t.Fatalf("expected limit: %v", err)
+	}
+	if err := s.DeleteSubmission(last, alice); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.PutSubmission(alice, content()); err != nil {
+		t.Fatalf("slot should be free after a quick delete: %v", err)
+	}
+}
+
+func TestRefundGoesToOwnerWhenAdminDeletes(t *testing.T) {
+	s := newTestStore(t)
+	id, _ := s.PutSubmission(alice, content())
+	if err := s.DeleteSubmission(id, admin); err != nil {
+		t.Fatal(err)
+	}
+	if q, _ := s.GetQuotas(alice); q.Content != MaxContentPieces {
+		t.Fatalf("alice quota: %+v", q)
+	}
+	if q, _ := s.GetQuotas(admin); q.Content != MaxContentPieces {
+		t.Fatalf("admin quota must be untouched: %+v", q)
+	}
+}
+
+func TestNoRefundAcrossMonths(t *testing.T) {
+	s := newTestStore(t)
+	id, _ := s.PutSubmission(alice, content())
+	// a recent submission whose tracker covers a different month (e.g. it was
+	// submitted just before midnight on the last day of the month)
+	err := s.db.Update(func(tx *bbolt.Tx) error {
+		prev := time.Now().UTC().AddDate(0, -1, 0)
+		return putJSON(tx.Bucket(submissionsTrackerBucket), UserKey(alice),
+			SubmissionTracker{Year: prev.Year(), Month: prev.Month(), ContentPieces: 3})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteSubmission(id, alice); err != nil {
+		t.Fatal(err)
+	}
+	var tr *SubmissionTracker
+	_ = s.db.View(func(tx *bbolt.Tx) error {
+		tr, _ = getJSON[SubmissionTracker](tx.Bucket(submissionsTrackerBucket), UserKey(alice))
+		return nil
+	})
+	if tr == nil || tr.ContentPieces != 3 {
+		t.Fatalf("tracker of another month must not change: %+v", tr)
+	}
+}
+
+func TestRefundNeverGoesNegative(t *testing.T) {
+	s := newTestStore(t)
+	id, _ := s.PutSubmission(alice, submissionOf(EventSubmissionType))
+	if err := s.DeleteSubmission(id, alice); err != nil {
+		t.Fatal(err)
+	}
+	var tr *SubmissionTracker
+	_ = s.db.View(func(tx *bbolt.Tx) error {
+		tr, _ = getJSON[SubmissionTracker](tx.Bucket(submissionsTrackerBucket), UserKey(alice))
+		return nil
+	})
+	if tr == nil || tr.Events != 0 || tr.ContentPieces != 0 {
+		t.Fatalf("tracker = %+v", tr)
+	}
+}

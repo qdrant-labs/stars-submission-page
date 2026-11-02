@@ -19,6 +19,9 @@ const BoltDBPath string = "kv.db"
 const MaxContentPieces int = 5
 const MaxCodePieces int = 10
 
+// RefundWindow is how long after submitting a delete still gives the quota slot back.
+const RefundWindow = 24 * time.Hour
+
 type Store struct {
 	db *bbolt.DB
 }
@@ -288,7 +291,9 @@ func (s *Store) GetSubmission(submissionId string, user User) (*Submission, erro
 	return sub, nil
 }
 
-// Note: deleting a submission does not decrement the submissions tracker count
+// DeleteSubmission removes a submission. If it is deleted within RefundWindow of
+// being submitted (and still in the month it was counted against), the quota slot
+// is given back; later deletions do not free the slot.
 func (s *Store) DeleteSubmission(submissionId string, user User) error {
 	err := s.db.Update(func(tx *bbolt.Tx) error {
 		subs := tx.Bucket(submissionsBucket)
@@ -305,6 +310,11 @@ func (s *Store) DeleteSubmission(submissionId string, user User) error {
 		if err := subs.Delete([]byte(submissionId)); err != nil {
 			return err
 		}
+		if time.Since(sub.Timestamp) <= RefundWindow {
+			if err := refundSlot(tx, sub); err != nil {
+				return err
+			}
+		}
 		userSubs := tx.Bucket(userSubmissionsBucket)
 		list, err := getJSON[UserSubmissions](userSubs, []byte(sub.Owner))
 		if err != nil || list == nil {
@@ -320,6 +330,31 @@ func (s *Store) DeleteSubmission(submissionId string, user User) error {
 		return fmt.Errorf("error while deleting submission %s: %w", submissionId, err)
 	}
 	return nil
+}
+
+// refundSlot decrements the owner's counter for the submission's type, but only
+// if the tracker still covers the month the submission was counted in.
+func refundSlot(tx *bbolt.Tx, sub *Submission) error {
+	trackers := tx.Bucket(submissionsTrackerBucket)
+	tracker, err := getJSON[SubmissionTracker](trackers, []byte(sub.Owner))
+	if err != nil || tracker == nil {
+		return err
+	}
+	ts := sub.Timestamp.UTC()
+	if tracker.Year != ts.Year() || tracker.Month != ts.Month() {
+		return nil
+	}
+	switch sub.SubmissionType {
+	case ContentSubmissionType:
+		tracker.ContentPieces = max(tracker.ContentPieces-1, 0)
+	case CodeSubmissionType:
+		tracker.CodePieces = max(tracker.CodePieces-1, 0)
+	case EventSubmissionType:
+		tracker.Events = max(tracker.Events-1, 0)
+	case OtherSubmissionType:
+		tracker.OtherPieces = max(tracker.OtherPieces-1, 0)
+	}
+	return putJSON(trackers, []byte(sub.Owner), tracker)
 }
 
 func (s *Store) GetSubmissions(u User) ([]Submission, error) {

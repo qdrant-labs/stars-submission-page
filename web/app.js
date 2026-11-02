@@ -68,6 +68,14 @@ function safeHref(raw) {
   }
 }
 
+// Mirrors the server rule: a delete within 24h of submitting frees the quota slot.
+function refundNote(sub, whose) {
+  const fresh = Date.now() - new Date(sub.timestamp) <= 24 * 60 * 60 * 1000;
+  return fresh
+    ? "It was submitted less than 24 hours ago, so the slot is given back."
+    : `It will still count toward ${whose} monthly limit.`;
+}
+
 function renderItem(sub, admin = false) {
   const li = document.createElement("li");
   li.className = "item";
@@ -90,8 +98,8 @@ function renderItem(sub, admin = false) {
   del.textContent = "Delete";
   del.addEventListener("click", async () => {
     const q = admin
-      ? `Delete submission ${sub.id}? This cannot be undone. It will still count toward the owner's monthly limit.`
-      : "Delete this submission? It will still count toward this month's limit.";
+      ? `Delete submission ${sub.id}? This cannot be undone. ${refundNote(sub, "the owner's")}`
+      : `Delete this submission? ${refundNote(sub, "your")}`;
     if (!confirm(q)) return;
     del.disabled = true;
     try {
@@ -270,7 +278,7 @@ async function loadQuota() {
     const { content, code } = await res.json();
     const parts = [
       `${content} of 5 content submissions and ${code} of 10 code submissions left this month.`,
-      "Events and other submissions are unlimited. Deleting a submission does not give the slot back.",
+      "Events and other submissions are unlimited. Deleting a submission within 24 hours gives the slot back; later, it does not.",
     ];
     el.textContent = parts.join(" ");
     // Out of slots: steer the form to events instead of failing on submit.
