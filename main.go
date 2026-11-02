@@ -38,6 +38,7 @@ type App struct {
 	llm                *internals.LLM
 	submissionsChannel chan<- internals.Submission
 	rateLimiter        *limiter.Limiter
+	cli                cliCodes
 }
 
 func randString(n int) string {
@@ -49,14 +50,24 @@ func randString(n int) string {
 }
 
 func (a *App) setCookie(w http.ResponseWriter, name, val, path string, ttl time.Duration) {
+	maxAge := int(ttl.Seconds())
+	if ttl < 0 {
+		maxAge = -1 // delete now; a tiny negative ttl would truncate to 0, which sends no Max-Age at all
+	}
 	http.SetCookie(w, &http.Cookie{
 		Name: name, Value: val, Path: path,
-		MaxAge:   int(ttl.Seconds()),
+		MaxAge:   maxAge,
 		HttpOnly: true, Secure: a.secure, SameSite: http.SameSiteLaxMode,
 	})
 }
 
 func (a *App) login(w http.ResponseWriter, r *http.Request) {
+	// A browser login must not be mistaken for an abandoned CLI login.
+	a.clearCLICookies(w)
+	a.startLogin(w, r)
+}
+
+func (a *App) startLogin(w http.ResponseWriter, r *http.Request) {
 	state := randString(24)
 	nonce := randString(24)
 	verifier := oauth2.GenerateVerifier()
@@ -100,6 +111,10 @@ func (a *App) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if a.finishCLILogin(w, r, u) {
+		return
+	}
+
 	sid := randString(32)
 	if err := a.store.PutSession(sid, u, 24*time.Hour); err != nil {
 		log.Printf("could not store session: %v", err)
@@ -114,11 +129,11 @@ func (a *App) callback(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) userFrom(r *http.Request) (internals.User, bool) {
-	c, err := r.Cookie("session")
-	if err != nil {
+	sid, ok := sessionID(r)
+	if !ok {
 		return internals.User{}, false
 	}
-	s, err := a.store.GetSession(c.Value)
+	s, err := a.store.GetSession(sid)
 	if err != nil {
 		return internals.User{}, false
 	}
@@ -143,8 +158,8 @@ func (a *App) me(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) logout(w http.ResponseWriter, r *http.Request) {
-	if c, err := r.Cookie("session"); err == nil {
-		a.store.DeleteSession(c.Value)
+	if sid, ok := sessionID(r); ok {
+		a.store.DeleteSession(sid)
 	}
 	a.setCookie(w, "session", "", "/", -1)
 	w.WriteHeader(http.StatusNoContent)
@@ -387,6 +402,8 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /auth/login", app.login)
 	mux.HandleFunc("GET /auth/callback", app.callback)
+	mux.HandleFunc("GET /auth/cli", app.cliLogin)
+	mux.HandleFunc("POST /auth/cli/token", app.cliToken)
 	mux.HandleFunc("POST /auth/logout", app.logout)
 	mux.HandleFunc("GET /api/me", app.require(app.me))
 	mux.HandleFunc("GET /api/quota", app.require(app.getQuota))

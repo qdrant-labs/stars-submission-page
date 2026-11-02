@@ -1,0 +1,62 @@
+name: Release CLI
+
+# Push a tag like cli@v0.1.0 to build and publish the qstars CLI.
+on:
+  push:
+    tags: [ 'cli@*' ]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # GoReleaser OSS cannot parse "cli@v0.1.0" as a version, so give it the bare one.
+      - name: Get version from tag
+        id: version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="${TAG#cli@}"
+          if ! [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Tag '$TAG' must look like cli@v1.2.3 (or cli@v1.2.3-rc.1)"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build release archives
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          args: release --clean --skip=validate
+        env:
+          GORELEASER_CURRENT_TAG: ${{ steps.version.outputs.version }}
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          args=(--title "qstars $VERSION" --verify-tag --generate-notes)
+          # Notes cover the changes since the previous CLI release, not the server's tags.
+          prev=$(git tag --list 'cli@*' --sort=-v:refname | grep -vxF "$TAG" | head -n 1 || true)
+          if [ -n "$prev" ]; then args+=(--notes-start-tag "$prev"); fi
+          # Pre-releases (cli@v1.2.3-rc.1) are marked as such.
+          if [[ "$VERSION" == *-* ]]; then args+=(--prerelease); fi
+          gh release create "$TAG" "${args[@]}" dist/*.tar.gz dist/*.zip dist/checksums.txt

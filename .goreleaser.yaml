@@ -1,0 +1,35 @@
+# Builds the qstars CLI. It is run by .github/workflows/cli-release.yml on tags
+# named cli@vX.Y.Z. GoReleaser OSS cannot parse a prefixed tag as a version, so the
+# workflow passes the bare version in GORELEASER_CURRENT_TAG and creates the GitHub
+# release itself (hence `release.disable` and `changelog.disable` below).
+version: 2
+project_name: qstars
+
+builds:
+  - id: qstars
+    main: ./cmd/qstars
+    binary: qstars
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - id: qstars
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: "qstars_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  disable: true
+
+release:
+  disable: true

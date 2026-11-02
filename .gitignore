@@ -4,3 +4,4 @@ server
 ci-trigger
 signup-links.csv
 table.tsv
+dist/
