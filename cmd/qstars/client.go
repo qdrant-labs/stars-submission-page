@@ -41,8 +41,13 @@ func newClient(server, token string) *client {
 	return &client{server: strings.TrimRight(server, "/"), token: token, http: &http.Client{Timeout: 30 * time.Second}}
 }
 
-// do sends the request with the bearer token and decodes a JSON response into out (if non-nil).
+// do sends a JSON request with the bearer token and decodes a JSON response into out (if non-nil).
 func (c *client) do(ctx context.Context, method, path string, body io.Reader, out any) error {
+	return c.doAs(ctx, method, path, "application/json", body, out)
+}
+
+// doAs is do with an explicit request content type (e.g. multipart for uploads).
+func (c *client) doAs(ctx context.Context, method, path, contentType string, body io.Reader, out any) error {
 	req, err := http.NewRequestWithContext(ctx, method, c.server+path, body)
 	if err != nil {
 		return err
@@ -51,7 +56,7 @@ func (c *client) do(ctx context.Context, method, path string, body io.Reader, ou
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
 	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Content-Type", contentType)
 	}
 	res, err := c.http.Do(req)
 	if err != nil {

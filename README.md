@@ -17,7 +17,8 @@ Set these environment variables (a `.env` file works for the commands below):
 | `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | OIDC client credentials |
 | `BASE_URL` | Public URL of this app, with no trailing slash, e.g. `https://stars.example.com` |
 | `OPENROUTER_API_KEY` | OpenRouter API key |
-| `SLACK_WEBHOOK_URL` | Slack Workflow webhook (it must accept a `message` variable) |
+| `SLACK_WEBHOOK_URL` | Slack Workflow webhook. It must define a `message` text variable and an `attachments` text variable (see Attachments) |
+| `ATTACHMENTS_DIR` | Optional, where uploaded files are stored. Defaults to `attachments` in the working directory (`/data/attachments` in Docker) |
 | `PORT` | Optional, defaults to `8080` |
 
 In Pocket ID, allow the callback URL `<BASE_URL>/auth/callback`, and enable the `groups` scope so admins are recognized.
@@ -29,13 +30,21 @@ In Pocket ID, allow the callback URL `<BASE_URL>/auth/callback`, and enable the 
 set -a; source .env; set +a
 go run .
 
-# with Docker
-touch kv.db   # the database lives next to the binary, so mount it to keep your data
+# with Docker: kv.db and the attachments live in /data, so mount a volume there to keep them
 docker build -t stars-submission-page .
-docker run --rm -p 8080:8080 --env-file .env -v "$PWD/kv.db:/app/kv.db" stars-submission-page
+docker run --rm -p 8080:8080 --env-file .env -v "$PWD/data:/data" stars-submission-page
 ```
 
 Then open `http://localhost:8080` (or your `BASE_URL`). Keep `BASE_URL` in sync with how you reach the app: it sets the login redirect, and session cookies are marked `Secure` when it starts with `https://`.
+
+## Attachments
+
+A submission can carry up to 3 files (PNG, JPG or PDF, 2 MB each), for example to prove that you attended an event. Each user can store 50 MB in total.
+
+- Files are stored on disk in `ATTACHMENTS_DIR` (put it on a volume); only their metadata goes in `kv.db`. Deleting a submission deletes its files.
+- The file type is detected from the content, not the file name. Files are served as downloads only.
+- **Only admins can open attachments.** The owner sees the file names, not the files.
+- **Slack:** the notification webhook gets an extra `attachments` variable, the download links as one text, one link per line (empty when there are none). In Workflow Builder, add it to the webhook trigger as a text variable and use it in the message step. Add the variable before deploying, since the webhook may refuse a payload with a variable it does not define. A link asks the admin to log in first, then opens the file.
 
 ## CLI
 
@@ -71,7 +80,7 @@ This opens your browser on the normal login page. When you finish, the terminal 
 | `qstars logout` | End the session on the server and forget it locally |
 | `qstars quota` | Show how many content and code submissions you have left this month |
 | `qstars list [--all]` | List your submissions, newest first (`--all`: everyone's, admins only) |
-| `qstars submit -t TYPE [-u URL] [-d TEXT]` | Submit something for review |
+| `qstars submit -t TYPE [-u URL] [-d TEXT] [-a FILE]...` | Submit something for review, optionally with attachments |
 | `qstars delete ID [-y]` | Delete a submission, after asking (`-y` skips the question) |
 
 `submit` takes `--type` (`content`, `code`, `event` or `other`; required), an optional `--url`, and the description from `--description`, or from standard input when it is piped in:
@@ -79,7 +88,10 @@ This opens your browser on the normal login page. When you finish, the terminal 
 ```bash
 qstars submit -t content -u https://example.com/post -d "My post about hybrid search"
 qstars submit -t event < description.txt
+qstars submit -t event -d "Qdrant meetup Berlin" -a badge.png -a ticket.pdf   # with proof of attendance
 ```
+
+`--attach` (`-a`) can be repeated up to 3 times. Files are checked before upload (PNG, JPG or PDF, at most 2 MB each).
 
 Limits are the same as on the website: 5 content and 10 code submissions per month, and deleting within 24 hours gives the slot back. `qstars <command> --help` shows all options.
 

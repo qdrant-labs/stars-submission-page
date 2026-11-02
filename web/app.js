@@ -59,6 +59,26 @@ function showDashboard(user) {
   loadQuota();
 }
 
+const MAX_FILES = 3;
+const MAX_FILE_BYTES = 2 * 1024 * 1024;
+const FILE_TYPES = ["image/png", "image/jpeg", "application/pdf"];
+
+function formatSize(n) {
+  return n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
+}
+
+// Returns an error message for a bad file selection, or "" if it looks fine.
+// The server checks everything again; this only saves a round trip.
+function checkFiles(files) {
+  if (files.length > MAX_FILES) return `You can attach at most ${MAX_FILES} files.`;
+  for (const f of files) {
+    if (f.size > MAX_FILE_BYTES) return `${f.name} is larger than 2 MB.`;
+    if (f.size === 0) return `${f.name} is empty.`;
+    if (f.type && !FILE_TYPES.includes(f.type)) return `${f.name} must be a PNG, JPG or PDF file.`;
+  }
+  return "";
+}
+
 function safeHref(raw) {
   try {
     const u = new URL(raw);
@@ -131,6 +151,29 @@ function renderItem(sub, admin = false) {
     a.target = "_blank";
     a.textContent = href;
     li.append(a);
+  }
+
+  if (sub.attachments && sub.attachments.length) {
+    const files = document.createElement("ul");
+    files.className = "item__files";
+    for (const a of sub.attachments) {
+      const f = document.createElement("li");
+      // Only admins can open attachments; everyone else just sees that they exist.
+      if (isAdmin) {
+        const link = document.createElement("a");
+        link.href = `/api/submissions/${encodeURIComponent(sub.id)}/attachments/${encodeURIComponent(a.id)}`;
+        link.textContent = a.name;
+        f.append("📎 ", link);
+      } else {
+        f.append(`📎 ${a.name}`);
+      }
+      const size = document.createElement("span");
+      size.className = "muted";
+      size.textContent = ` ${formatSize(a.size)}`;
+      f.append(size);
+      files.append(f);
+    }
+    li.append(files);
   }
 
   const p = document.createElement("p");
@@ -383,14 +426,24 @@ $("form").addEventListener("submit", async (e) => {
   };
   if (url) body.url = url;
 
+  const files = [...$("files").files];
+  const fileError = checkFiles(files);
+  if (fileError) return flash(msg, fileError);
+
   const btn = $("submit");
   btn.disabled = true;
   try {
-    await api("/api/submissions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
+    let init;
+    if (files.length) {
+      // multipart: the JSON as the "data" part, then the files (the browser sets the boundary)
+      const fd = new FormData();
+      fd.append("data", new Blob([JSON.stringify(body)], { type: "application/json" }));
+      for (const f of files) fd.append("files", f, f.name);
+      init = { method: "POST", body: fd };
+    } else {
+      init = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+    }
+    await api("/api/submissions", init);
     e.target.reset();
     $("count").textContent = "0 / 5000";
     flash(msg, "Submitted. Thank you!", true, 15000);

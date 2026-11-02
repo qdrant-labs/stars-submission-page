@@ -6,9 +6,14 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/png"
+	"io"
+	"mime"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -93,7 +98,25 @@ func newFakeServer(t *testing.T) *fakeServer {
 	}))
 	mux.HandleFunc("POST /api/submissions", authed(func(w http.ResponseWriter, r *http.Request) {
 		var req map[string]string
-		json.NewDecoder(r.Body).Decode(&req)
+		if mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); mt == "multipart/form-data" {
+			mr, _ := r.MultipartReader()
+			var names []string
+			for {
+				part, err := mr.NextPart()
+				if err != nil {
+					break
+				}
+				data, _ := io.ReadAll(part)
+				if part.FormName() == "data" {
+					json.Unmarshal(data, &req)
+				} else {
+					names = append(names, part.FileName()+":"+http.DetectContentType(data))
+				}
+			}
+			req["files"] = strings.Join(names, ",")
+		} else {
+			json.NewDecoder(r.Body).Decode(&req)
+		}
 		f.mu.Lock()
 		f.submitted = append(f.submitted, req)
 		n := len(f.submitted)
@@ -382,5 +405,60 @@ func TestDeleteUnknownID(t *testing.T) {
 	}
 	if _, err := run(t, "delete"); err == nil {
 		t.Fatal("delete without an id must fail")
+	}
+}
+
+func writeTemp(t *testing.T, name string, data []byte) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(p, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func pngFile(t *testing.T, name string) string {
+	var b bytes.Buffer
+	if err := png.Encode(&b, image.NewRGBA(image.Rect(0, 0, 4, 4))); err != nil {
+		t.Fatal(err)
+	}
+	return writeTemp(t, name, b.Bytes())
+}
+
+func TestSubmitWithAttachments(t *testing.T) {
+	f := loggedIn(t)
+	img := pngFile(t, "badge.png")
+	pdf := writeTemp(t, "ticket.pdf", []byte("%PDF-1.4\n%%EOF\n"))
+	got, err := run(t, "submit", "-t", "event", "-d", "Berlin meetup", "-a", img, "--attach", pdf)
+	if err != nil || !strings.Contains(got, "Submitted") {
+		t.Fatalf("%v\n%s", err, got)
+	}
+	s := f.submitted[0]
+	if s["type"] != "event" || s["description"] != "Berlin meetup" || s["files"] != "badge.png:image/png,ticket.pdf:application/pdf" {
+		t.Fatalf("server received %v", s)
+	}
+}
+
+func TestSubmitAttachmentChecksHappenLocally(t *testing.T) {
+	f := loggedIn(t)
+	good := pngFile(t, "ok.png")
+	big := writeTemp(t, "big.png", append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, maxAttachmentBytes)...))
+	txt := writeTemp(t, "notes.png", []byte("not really an image"))
+	empty := writeTemp(t, "empty.png", nil)
+	for name, args := range map[string][]string{
+		"missing file": {"-a", "/nonexistent/file.png"},
+		"directory":    {"-a", t.TempDir()},
+		"too big":      {"-a", big},
+		"wrong type":   {"-a", txt},
+		"empty":        {"-a", empty},
+		"four files":   {"-a", good, "-a", good, "-a", good, "-a", good},
+	} {
+		args = append([]string{"submit", "-t", "event", "-d", "x"}, args...)
+		if _, err := run(t, args...); err == nil {
+			t.Errorf("%s: expected an error", name)
+		}
+	}
+	if len(f.submitted) != 0 {
+		t.Fatalf("nothing should reach the server: %v", f.submitted)
 	}
 }

@@ -2,6 +2,7 @@ package internals
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -36,7 +37,7 @@ func TestSlackRetriesWithFullBody(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c.SendNotification(context.Background(), "desc", "alice", "a@example.com", nil, nil); err != nil {
+	if err := c.SendNotification(context.Background(), "desc", "alice", "a@example.com", nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if calls.Load() != 3 {
@@ -59,7 +60,7 @@ func TestSlackGivesUpAndDoesNotRetryClientErrors(t *testing.T) {
 		}))
 		t.Setenv("SLACK_WEBHOOK_URL", srv.URL)
 		c, _ := NewSlackClient()
-		if err := c.SendNotification(context.Background(), "d", "n", "e", nil, nil); err == nil {
+		if err := c.SendNotification(context.Background(), "d", "n", "e", nil, nil, nil); err == nil {
 			t.Errorf("status %d: expected an error", tc.status)
 		}
 		if int(calls.Load()) != tc.wantCalls {
@@ -100,7 +101,36 @@ func TestSlackSendHonorsContext(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	if err := c.SendNotification(ctx, "d", "n", "e", nil, nil); err == nil || time.Since(start) > 2*time.Second {
+	if err := c.SendNotification(ctx, "d", "n", "e", nil, nil, nil); err == nil || time.Since(start) > 2*time.Second {
 		t.Fatalf("err = %v after %v", err, time.Since(start))
+	}
+}
+
+func TestSlackPayloadAttachmentsAreNewlineSeparated(t *testing.T) {
+	var bodies []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var m map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&m)
+		bodies = append(bodies, m)
+	}))
+	defer srv.Close()
+	c := &SlackClient{webhook: srv.URL, client: srv.Client()}
+
+	links := []string{"https://x.example/api/submissions/ev-1/attachments/a", "https://x.example/api/submissions/ev-1/attachments/b"}
+	if err := c.SendNotification(context.Background(), "d", "n", "e", nil, nil, links); err != nil {
+		t.Fatal(err)
+	}
+	// no attachments must still send the key, as an empty text
+	if err := c.SendNotification(context.Background(), "d", "n", "e", nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := bodies[0]["attachments"]; got != links[0]+"\n"+links[1] {
+		t.Fatalf("attachments = %#v", got)
+	}
+	if empty, ok := bodies[1]["attachments"].(string); !ok || empty != "" {
+		t.Fatalf("empty case = %#v", bodies[1]["attachments"])
+	}
+	if _, ok := bodies[0]["message"].(string); !ok {
+		t.Fatal("message variable must still be sent")
 	}
 }

@@ -80,6 +80,7 @@ type Submission struct {
 	SubmissionType SubmissionType `json:"type"`
 	Url            *string        `json:"url,omitempty"`
 	Details        string         `json:"description"`
+	Attachments    []Attachment   `json:"attachments,omitempty"` // set by the server only
 	Timestamp      time.Time      `json:"timestamp"`
 }
 

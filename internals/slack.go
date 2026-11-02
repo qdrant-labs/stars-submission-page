@@ -72,9 +72,12 @@ func buildMessage(description, ownerName, ownerEmail string, url *string, evalua
 	return b.String()
 }
 
-func (s *SlackClient) SendNotification(ctx context.Context, submissionDescription, submissionOwnerName, submissionOwnerEmail string, submissionUrl *string, evaluation *LlmEvaluationOutput) error {
+// SendNotification posts the submission to the Slack Workflow webhook. attachments
+// are download links; the "attachments" variable is always sent, as one text with a
+// link per line (a list variable makes Slack add commas), empty when there are none.
+func (s *SlackClient) SendNotification(ctx context.Context, submissionDescription, submissionOwnerName, submissionOwnerEmail string, submissionUrl *string, evaluation *LlmEvaluationOutput, attachments []string) error {
 	msg := buildMessage(submissionDescription, submissionOwnerName, submissionOwnerEmail, submissionUrl, evaluation)
-	data, err := json.Marshal(map[string]string{"message": msg})
+	data, err := json.Marshal(map[string]string{"message": msg, "attachments": strings.Join(attachments, "\n")})
 	if err != nil {
 		return err
 	}

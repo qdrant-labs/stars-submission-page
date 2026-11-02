@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
@@ -39,6 +40,7 @@ type App struct {
 	submissionsChannel chan<- internals.Submission
 	rateLimiter        *limiter.Limiter
 	cli                cliCodes
+	attachments        *internals.AttachmentStore
 }
 
 func randString(n int) string {
@@ -64,6 +66,11 @@ func (a *App) setCookie(w http.ResponseWriter, name, val, path string, ttl time.
 func (a *App) login(w http.ResponseWriter, r *http.Request) {
 	// A browser login must not be mistaken for an abandoned CLI login.
 	a.clearCLICookies(w)
+	if next := r.URL.Query().Get("next"); attachmentPathRe.MatchString(next) {
+		a.setCookie(w, "login_next", next, "/auth", 10*time.Minute)
+	} else {
+		a.setCookie(w, "login_next", "", "/auth", -1)
+	}
 	a.startLogin(w, r)
 }
 
@@ -125,7 +132,12 @@ func (a *App) callback(w http.ResponseWriter, r *http.Request) {
 	a.setCookie(w, "oidc_state", "", "/auth", -1)
 	a.setCookie(w, "oidc_verifier", "", "/auth", -1)
 	a.setCookie(w, "oidc_nonce", "", "/auth", -1)
-	http.Redirect(w, r, "/", http.StatusFound)
+	dest := "/"
+	if c, err := r.Cookie("login_next"); err == nil && attachmentPathRe.MatchString(c.Value) {
+		dest = c.Value // e.g. an attachment link opened from Slack before logging in
+	}
+	a.setCookie(w, "login_next", "", "/auth", -1)
+	http.Redirect(w, r, dest, http.StatusFound)
 }
 
 func (a *App) userFrom(r *http.Request) (internals.User, bool) {
@@ -170,6 +182,8 @@ func writeStoreError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, internals.ErrInvalid):
 		http.Error(w, err.Error(), http.StatusBadRequest)
+	case errors.Is(err, internals.ErrTooLarge):
+		http.Error(w, err.Error(), http.StatusRequestEntityTooLarge)
 	case errors.Is(err, internals.ErrLimitReached):
 		http.Error(w, err.Error(), http.StatusTooManyRequests)
 	case errors.Is(err, internals.ErrForbidden):
@@ -190,22 +204,6 @@ func writeJSON(w http.ResponseWriter, v any) {
 }
 
 const maxBodyBytes = 64 << 10
-
-func (a *App) submit(w http.ResponseWriter, r *http.Request) {
-	var req internals.Submission
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&req); err != nil {
-		http.Error(w, "malformed request body", http.StatusBadRequest)
-		return
-	}
-	u, _ := a.userFrom(r)
-	submissionId, err := a.store.PutSubmission(u, req)
-	if err != nil {
-		writeStoreError(w, err)
-		return
-	}
-	a.notify(submissionId, u)
-	writeJSON(w, internals.SubmissionResponse{ID: submissionId})
-}
 
 // notify queues the stored submission (validated, with the owner's identity filled
 // in) for evaluation and the Slack notification. It never blocks the request.
@@ -244,10 +242,16 @@ func (a *App) getSubmission(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) deleteSubmission(w http.ResponseWriter, r *http.Request) {
 	u, _ := a.userFrom(r)
-	if err := a.store.DeleteSubmission(r.PathValue("id"), u); err != nil {
+	sub, err := a.store.GetSubmission(r.PathValue("id"), u) // also checks permission
+	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
+	if err := a.store.DeleteSubmission(sub.ID, u); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	a.attachments.Remove(sub.Attachments...)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -317,7 +321,7 @@ const llmTimeout = 3 * time.Minute
 
 // evalWorker evaluates content submissions with the LLM and posts the result to
 // Slack. If the evaluation fails, the notification is still sent without a review.
-func evalWorker(ctx context.Context, subs <-chan internals.Submission, llm *internals.LLM, slack *internals.SlackClient) {
+func evalWorker(ctx context.Context, subs <-chan internals.Submission, llm *internals.LLM, slack *internals.SlackClient, baseURL string) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -335,11 +339,20 @@ func evalWorker(ctx context.Context, subs <-chan internals.Submission, llm *inte
 					evaluation = ev
 				}
 			}
-			if err := slack.SendNotification(ctx, s.Details, s.OwnerUsername, s.OwnerEmail, s.Url, evaluation); err != nil {
+			if err := slack.SendNotification(ctx, s.Details, s.OwnerUsername, s.OwnerEmail, s.Url, evaluation, attachmentLinks(baseURL, s)); err != nil {
 				log.Printf("could not send the Slack notification for submission %s: %v", s.ID, err)
 			}
 		}
 	}
+}
+
+// attachmentLinks are the download URLs for a submission's attachments (admins only).
+func attachmentLinks(baseURL string, s internals.Submission) []string {
+	links := make([]string, 0, len(s.Attachments))
+	for _, at := range s.Attachments {
+		links = append(links, fmt.Sprintf("%s/api/submissions/%s/attachments/%s", baseURL, url.PathEscape(s.ID), at.ID))
+	}
+	return links
 }
 
 func main() {
@@ -354,6 +367,10 @@ func main() {
 		if v == "" {
 			log.Fatalf("missing required environment variable %s", name)
 		}
+	}
+	attachments, err := internals.NewAttachmentStore(getenv("ATTACHMENTS_DIR", "attachments"))
+	if err != nil {
+		log.Fatal(err)
 	}
 	store, err := internals.NewStore()
 	if err != nil {
@@ -377,7 +394,7 @@ func main() {
 	subChan := make(chan internals.Submission, 64)
 	var wg sync.WaitGroup
 	wg.Go(func() { store.CleanupSessions(ctx, time.Hour) })
-	wg.Go(func() { evalWorker(ctx, subChan, llm, slack) })
+	wg.Go(func() { evalWorker(ctx, subChan, llm, slack, baseURL) })
 
 	provider, err := oidc.NewProvider(ctx, issuer)
 	if err != nil {
@@ -393,6 +410,7 @@ func main() {
 		},
 		verifier:           provider.Verifier(&oidc.Config{ClientID: clientID}),
 		store:              store,
+		attachments:        attachments,
 		secure:             strings.HasPrefix(baseURL, "https://"),
 		submissionsChannel: subChan,
 		llm:                llm,
@@ -410,6 +428,7 @@ func main() {
 	mux.HandleFunc("POST /api/submissions", app.require(app.submit))
 	mux.HandleFunc("GET /api/submissions", app.require(app.getSubmissionsByUser))
 	mux.HandleFunc("GET /api/submissions/{id}", app.require(app.getSubmission))
+	mux.HandleFunc("GET /api/submissions/{id}/attachments/{aid}", app.getAttachment)
 	mux.HandleFunc("DELETE /api/submissions/{id}", app.require(app.deleteSubmission))
 	mux.HandleFunc("GET /api/admin/submissions", app.require(app.getSubmissions))
 	mux.HandleFunc("POST /api/suggestions", app.require(app.getSuggestions))
