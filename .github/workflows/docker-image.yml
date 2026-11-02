@@ -4,6 +4,8 @@ on:
   push:
     tags: [ 'v*.*.*' ]
     branches: [ main ]
+    paths-ignore:
+      - "README.md"
 
 env:
   REGISTRY: ghcr.io

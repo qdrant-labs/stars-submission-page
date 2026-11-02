@@ -37,6 +37,52 @@ docker run --rm -p 8080:8080 --env-file .env -v "$PWD/kv.db:/app/kv.db" stars-su
 
 Then open `http://localhost:8080` (or your `BASE_URL`). Keep `BASE_URL` in sync with how you reach the app: it sets the login redirect, and session cookies are marked `Secure` when it starts with `https://`.
 
+## CLI
+
+`qstars` is a command line client for the submission page, for when you would rather not use the browser for everything. It uses the same login as the website.
+
+### Install
+
+Download the archive for your OS and CPU from the [releases page](https://github.com/qdrant-labs/stars-submission-page/releases) (releases named `qstars vX.Y.Z`, tagged `cli@vX.Y.Z`), unpack it, and put the `qstars` binary on your `PATH`. Check the download against `checksums.txt` from the same release.
+
+```bash
+# with the GitHub CLI, e.g. Linux on amd64 (use the release tag you want)
+gh release download cli@v0.1.0-rc.1 -R qdrant-labs/stars-submission-page -p 'qstars_*_linux_amd64.tar.gz'
+tar xzf qstars_*_linux_amd64.tar.gz
+sudo mv qstars /usr/local/bin/
+qstars --version
+```
+
+Or build it from a checkout (Go 1.27+): `go build -o qstars ./cmd/qstars`.
+
+### Log in
+
+```bash
+qstars login --server https://stars.example.com
+```
+
+This opens your browser on the normal login page. When you finish, the terminal says "Logged in as …". If no browser opens, copy the printed URL into one on the same machine (`--no-browser` only prints it). The session lasts 30 days and is saved in `~/.config/qstars/config.json` (readable by you only). The server is remembered, so later commands need no flags. `QSTARS_URL` can replace `--server`, and `QSTARS_CONFIG` changes where the session is saved.
+
+### Commands
+
+| Command | What it does |
+| --- | --- |
+| `qstars login [--server URL] [--no-browser]` | Log in through your browser |
+| `qstars logout` | End the session on the server and forget it locally |
+| `qstars quota` | Show how many content and code submissions you have left this month |
+| `qstars list [--all]` | List your submissions, newest first (`--all`: everyone's, admins only) |
+| `qstars submit -t TYPE [-u URL] [-d TEXT]` | Submit something for review |
+| `qstars delete ID [-y]` | Delete a submission, after asking (`-y` skips the question) |
+
+`submit` takes `--type` (`content`, `code`, `event` or `other`; required), an optional `--url`, and the description from `--description`, or from standard input when it is piped in:
+
+```bash
+qstars submit -t content -u https://example.com/post -d "My post about hybrid search"
+qstars submit -t event < description.txt
+```
+
+Limits are the same as on the website: 5 content and 10 code submissions per month, and deleting within 24 hours gives the slot back. `qstars <command> --help` shows all options.
+
 ## Test
 
 ```bash
